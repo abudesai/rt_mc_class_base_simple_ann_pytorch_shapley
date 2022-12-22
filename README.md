@@ -2,6 +2,7 @@ Simple ANN-based Classifier in PyTorch with Shapley explanations for Multi-class
 
 - ANN
 - multi-class classification
+- Pytorch
 - shapley
 - XAI
 - HPT
@@ -14,8 +15,6 @@ Simple ANN-based Classifier in PyTorch with Shapley explanations for Multi-class
 - nginx
 - uvicorn
 - docker
-- tensorflow
-- keras
 
 This is a Multi-class Classifier that uses Simple ANN implemented through PyTorch. The ANN has a two hidden layers. Feature impacts are provided with Shapley values for model interpretability.
 
