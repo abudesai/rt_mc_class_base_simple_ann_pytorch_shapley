@@ -180,7 +180,7 @@ class Classifier():
 
     
     
-    def predict(self, X): 
+    def predict_proba(self, X): 
         X = T.FloatTensor(X).to(device) 
         preds = T.softmax(self.net(X), dim=-1).detach().cpu().numpy()
         return preds 

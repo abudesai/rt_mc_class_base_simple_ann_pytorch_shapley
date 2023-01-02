@@ -62,28 +62,7 @@ def infer():
 
     # Do the prediction
     try:
-        predictions_df = model_server.predict_proba(data)
-        predictions_df.columns = [str(c) for c in predictions_df.columns]
-        class_names = predictions_df.columns[1:]
-
-        predictions_df["__label"] = pd.DataFrame(
-            predictions_df[class_names], columns=class_names
-        ).idxmax(axis=1)
-
-        # convert to the json response specification
-        id_field_name = model_server.id_field_name
-        predictions_response = []
-        for rec in predictions_df.to_dict(orient="records"):
-            pred_obj = {}
-            pred_obj[id_field_name] = rec[id_field_name]
-            pred_obj["label"] = rec["__label"]
-            pred_obj["probabilities"] = {
-                str(k): np.round(v, 5)
-                for k, v in rec.items()
-                if k not in [id_field_name, "__label"]
-            }
-            predictions_response.append(pred_obj)
-
+        predictions_response = model_server.predict_to_json(data)
         return flask.Response(
             response=json.dumps({"predictions": predictions_response}),
             status=200,
@@ -107,53 +86,6 @@ def infer():
         )
 
 
-@app.route("/infer_file", methods=["POST"])
-def infer_file():
-    """Do an inference on a single batch of data. In this sample server, we take data as CSV, convert
-    it to a pandas data frame for internal use and then convert the predictions back to CSV (which really
-    just means one prediction per line, since there's a single column.
-    """
-    data = None
-
-    # Convert from CSV to pandas
-    if flask.request.content_type == "text/csv":
-        data = flask.request.data.decode("utf-8")
-        s = io.StringIO(data)
-        data = pd.read_csv(s)
-    else:
-        return flask.Response(
-            response="This predictor only supports CSV data",
-            status=415,
-            mimetype="text/plain",
-        )
-
-    print(f"Invoked with {data.shape[0]} records")
-
-    # Do the prediction
-    try:
-        predictions = model_server.predict(data)
-        # Convert from dataframe to CSV
-        out = io.StringIO()
-        predictions.to_csv(out, index=False)
-        result = out.getvalue()
-
-        return flask.Response(response=result, status=200, mimetype="text/csv")
-    except Exception as err:
-        # Write out an error file. This will be returned as the failureReason to the client.
-        trc = traceback.format_exc()
-        with open(failure_path, "w") as s:
-            s.write("Exception during inference: " + str(err) + "\n" + trc)
-        # Printing this causes the exception to be in the training job logs, as well.
-        print("Exception during inference: " + str(err) + "\n" + trc, file=sys.stderr)
-        # A non-zero exit code causes the training job to be marked as Failed.
-
-        return flask.Response(
-            response="Error generating predictions. Check failure file.",
-            status=400,
-            mimetype="text/plain",
-        )
-
-
 @app.route("/explain", methods=["POST"])
 def explain():
     """Get local explanations on a few samples. In this  server, we take data as JSON, convert
@@ -172,8 +104,6 @@ def explain():
             mimetype="text/plain",
         )
 
-    print(f"Invoked with {data.shape[0]} records")
-    # Do the prediction
     try:
         explanations = model_server.explain_local(data)  # returns a json string object
         return flask.Response(response=explanations, status=200, mimetype="text/csv")
@@ -195,46 +125,3 @@ def explain():
             mimetype="text/plain",
         )
 
-
-@app.route("/explain_file", methods=["POST"])
-def explain_file():
-    """Get local explanations on a few samples. In this  server, we take data as CSV, convert
-    it to a pandas data frame for internal use and then return the explanations back to JSON.
-    Explanations come back using the ids passed in the input data.
-    """
-    data = None
-
-    # Convert from CSV to pandas
-    if flask.request.content_type == "text/csv":
-        data = flask.request.data.decode("utf-8")
-        s = io.StringIO(data)
-        data = pd.read_csv(s)
-    else:
-        return flask.Response(
-            response="This predictor only supports CSV data",
-            status=415,
-            mimetype="text/plain",
-        )
-
-    print(f"Invoked with {data.shape[0]} records")
-    # Do the prediction
-    try:
-        explanations = model_server.explain_local(data)  # returns a json string object
-        return flask.Response(response=explanations, status=200, mimetype="text/csv")
-    except Exception as err:
-        # Write out an error file. This will be returned as the failureReason to the client.
-        trc = traceback.format_exc()
-        with open(failure_path, "w") as s:
-            s.write("Exception during explanation generation: " + str(err) + "\n" + trc)
-        # Printing this causes the exception to be in the training job logs, as well.
-        print(
-            "Exception during explanation generation: " + str(err) + "\n" + trc,
-            file=sys.stderr,
-        )
-        # A non-zero exit code causes the training job to be marked as Failed.
-
-        return flask.Response(
-            response="Error generating explanations. Check failure file.",
-            status=400,
-            mimetype="text/plain",
-        )

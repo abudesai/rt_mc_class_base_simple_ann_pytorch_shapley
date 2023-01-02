@@ -35,7 +35,7 @@ class ModelServer:
             self.model = mc_classifier.load_model(self.model_path)
         return self.model
 
-    def _get_predictions(self, data, return_probs=True):
+    def _get_predictions(self, data):
         preprocessor = self._get_preprocessor()
         model = self._get_model()
 
@@ -53,15 +53,12 @@ class ModelServer:
             proc_data["features"],
         )
         # make predictions
-        if return_probs:
-            preds = model.predict(pred_X)
-        else:
-            preds = model.predict(pred_X)
+        preds = model.predict_proba(pred_X)
 
         return preds, pred_ids, features
 
     def predict_proba(self, data):
-        preds, pred_ids, features = self._get_predictions(data, return_probs=True)
+        preds, pred_ids, features = self._get_predictions(data)
         class_names = pipeline.get_class_names(self.preprocessor, model_cfg)
         id_df = pd.DataFrame(pred_ids, columns=[self.id_field_name])
 
@@ -78,13 +75,30 @@ class ModelServer:
         preds_df.drop(class_names, axis=1, inplace=True)
         return preds_df
 
-    def _get_target_class_proba(self, X):
-        """
-        Returns predicted probability of the target class
-        """
-        model = self._get_model()
-        preds = model.predict(X)
-        return preds
+    def predict_to_json(self, data): 
+        predictions_df = self.predict_proba(data)
+        predictions_df.columns = [str(c) for c in predictions_df.columns]
+        class_names = predictions_df.columns[1:]
+
+        predictions_df["__label"] = pd.DataFrame(
+            predictions_df[class_names], columns=class_names
+        ).idxmax(axis=1)
+
+        # convert to the json response specification
+        id_field_name = self.id_field_name
+        predictions_response = []
+        for rec in predictions_df.to_dict(orient="records"):
+            pred_obj = {}
+            pred_obj[id_field_name] = rec[id_field_name]
+            pred_obj["label"] = rec["__label"]
+            pred_obj["probabilities"] = {
+                str(k): np.round(v, 5)
+                for k, v in rec.items()
+                if k not in [id_field_name, "__label"]
+            }
+            predictions_response.append(pred_obj)
+        return predictions_response
+
 
     def explain_local(self, data):
 
@@ -96,6 +110,7 @@ class ModelServer:
             print(msg)
 
         preprocessor = self._get_preprocessor()
+        model = self._get_model()
         # transform data - returns a dict of X (transformed input features) and Y(targets, if any, else None)
         proc_data = preprocessor.transform(data.head(self.MAX_LOCAL_EXPLANATIONS))
         # ------------------------------------------------------------------------------
@@ -106,42 +121,50 @@ class ModelServer:
             proc_data["ids"],
             proc_data["features"],
         )
-        pred_class_probs = model.predict(pred_X)
+        pred_class_probs = model.predict_proba(pred_X)
         class_names = pipeline.get_class_names(self.preprocessor, model_cfg)
 
         # ------------------------------------------------------------------------------
         print(f"Generating local explanations for {pred_X.shape[0]} sample(s).")
         # create the shapley explainer
         mask = np.zeros_like(pred_X)
-        explainer = Explainer(self._get_target_class_proba, mask, seed=1)
+        explainer = Explainer(model.predict_proba, mask, seed=1)
         # Get local explanations
         shap_values = explainer(pred_X)
         # ------------------------------------------------------------------------------
         # create json objects of explanation scores
         N = pred_X.shape[0]
         explanations = []
-        for i in range(N):
-            sample_expl_dict = {}
-            sample_expl_dict[self.id_field_name] = ids[i]
-            sample_expl_dict["predicted_class_prob"] = pred_class_probs[i].max()
-            sample_expl_dict["predicted_class"] = class_names[
-                pred_class_probs[i].argmax()
-            ]
+        for i in range(N):            
+
+            pred_class_idx =  pred_class_probs[i].argmax()
+            pred_class = str( class_names[pred_class_idx] )
+            pred_class_prob = np.round(pred_class_probs[i].max(), 5)
+            probabilities = {
+                k:np.round(v, 5) for k,v in zip(class_names, pred_class_probs[i])
+            }
 
             # pprint.pprint(sample_expl_dict) ; sys.exit()
-            sample_expl_dict["class_explanations"] = {}
+            sample_expl_dict = {}
             for j, c in enumerate(class_names):
                 class_exp_dict = {}
-                class_exp_dict["predicted_class_prob"] = pred_class_probs[i, j]
-                class_exp_dict["base_probability"] = shap_values.base_values[i, j]
-                feature_impacts = {
-                    f: np.round(v, 4)
+                class_exp_dict["class_prob"] = pred_class_probs[i, j]
+                class_exp_dict["baseline"] = np.round(shap_values.base_values[i, j], 5)
+                feature_scores = {
+                    f: np.round(v, 5)
                     for f, v in zip(features, shap_values.values[i, :, j])
                 }
-                class_exp_dict["feature_impacts"] = feature_impacts
+                class_exp_dict["feature_scores"] = feature_scores
 
-                sample_expl_dict["class_explanations"][str(c)] = class_exp_dict
-            explanations.append(sample_expl_dict)
+                sample_expl_dict[str(c)] = class_exp_dict
+
+            explanations.append({
+                self.id_field_name: ids[i],
+                "label": pred_class,
+                "label_prob": np.round(pred_class_prob, 5),
+                "probabilities": probabilities,
+                "explanations": sample_expl_dict
+            })
 
         # ------------------------------------------------------
         explanations = json.dumps(explanations, cls=utils.NpEncoder, indent=2)
