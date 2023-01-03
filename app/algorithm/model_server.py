@@ -110,7 +110,6 @@ class ModelServer:
             print(msg)
 
         preprocessor = self._get_preprocessor()
-        model = self._get_model()
         # transform data - returns a dict of X (transformed input features) and Y(targets, if any, else None)
         proc_data = preprocessor.transform(data.head(self.MAX_LOCAL_EXPLANATIONS))
         # ------------------------------------------------------------------------------
